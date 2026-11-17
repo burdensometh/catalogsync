@@ -39,6 +39,24 @@ HTML来源在meta中提供catalog:snapshot、catalog:boundary及可选catalog:cu
 - 当前只合并来源返回的记录，不推断“本次未出现”意味着删除。部分页、含拒绝行或重新抓取，都不会自动删除已有商品。
 - 发布读取一致的数据库快照，产物有校验和，旧发布文件不改。消费端按发布的来源范围事务替换；拒绝未曾应用过的过期发布，重复应用相同发布不改结果。
 
+## 来源映射或清洗规则修正后的重处理
+
+来源映射或质量规则修正后，归档里的原始页需要按新规则重新解析，但源端版本并未改变。重处理把“源端版本”（记录的revision及快照boundary）和“清洗口径”（来源映射版本）分开：同一源端revision可按每个口径各记录一次解释，因此按新口径重放旧归档不会被当作同版本冲突。
+
+- `reprocess <source>` 选择该来源最近一次已完成运行的归档页，用当前（或 `--profile-version` 指定、`--run` 指定基准运行）的口径逐页重放，结果先写入独立暂存表，不触碰当前商品。
+- 只有整批归档页全部成功暂存后，才在单个事务内切换为当前有效结果；任一页失败则当前结果、既有运行、拒绝行和已发布文件全部保持原样。
+- 失败的重处理可 `reprocess-resume <job>` 从已提交的页序号继续，不重复已暂存页。
+- 重处理进行期间经正常入口到达的更高源端revision按新口径写入，并属于切换后的有效结果；旧归档不会把已上线的更高版本回退。切换后发布与下游物化都读取切换后的有效结果。
+- 切换不会借更换规则放过来源同版本的真实冲突：同一源端revision对应的原始记录内容不一致时，该记录仍进入拒绝记录，当前商品保留原内容。
+
+```bash
+python3 -m catalogsync --home /tmp/state profile-set supplier new-profile.json
+python3 -m catalogsync --home /tmp/state reprocess supplier
+python3 -m catalogsync --home /tmp/state reprocess-jobs --source supplier
+python3 -m catalogsync --home /tmp/state reprocess-balance <job>
+python3 -m catalogsync --home /tmp/state reprocess-resume <job>
+```
+
 ## 常用操作
 
 ```bash

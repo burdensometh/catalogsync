@@ -13,12 +13,23 @@ class Provenance:
         versions = self.app.query.history(source_id, sku)
         with self.app.database.read() as connection:
             observations = [dict(row) for row in connection.execute(
-                """SELECT r.id AS run_id,r.mode,r.status,r.snapshot_id,r.boundary,
-                v.revision,v.observed_at FROM product_versions v
-                JOIN runs r ON r.id=v.first_run_id
-                WHERE v.source_id=? AND v.sku=? ORDER BY v.revision""", (source_id, sku)
+                """SELECT v.rule_version,
+                coalesce(r.id, j.id) AS origin_id,
+                CASE WHEN v.first_run_id IS NOT NULL THEN 'run' ELSE 'reprocess' END AS origin,
+                r.mode, r.status, r.snapshot_id, r.boundary,
+                v.revision, v.observed_at
+                FROM product_versions v
+                LEFT JOIN runs r ON r.id = v.first_run_id
+                LEFT JOIN reprocess_jobs j ON j.id = v.first_job_id
+                WHERE v.source_id = ? AND v.sku = ?
+                ORDER BY v.revision, v.rule_version""", (source_id, sku)
             )]
-        return {"current": product, "versions": versions, "first_observations": observations}
+        return {
+            "current": product,
+            "effective_rule_version": product.get("rule_version"),
+            "versions": versions,
+            "first_observations": observations,
+        }
 
     def run_profile(self, run_id):
         self.app.runs.get(run_id)
@@ -62,6 +73,7 @@ class Provenance:
             ).fetchone()[0]
         return {
             "run_id": run_id,
+            "profile_version": self.app.profiles.version_for_run(run_id),
             "pages": len(pages),
             "input_records": sum(page["record_count"] for page in pages),
             "accepted": run["accepted"],

@@ -1,7 +1,5 @@
-import json
-
 from .archive import Archive
-from .clients import client_for, decode_page
+from .clients import client_for
 from .errors import CatalogError, Conflict, ValidationError
 from .merge import ProductMerger
 from .models import Page, Product, canonical, now
@@ -85,6 +83,7 @@ class Ingestor:
     def commit_page(self, run_id, page, relative, sha):
         counts = dict.fromkeys(COUNTERS, 0)
         profile = self.profiles.for_run(run_id)
+        rule_version = self.profiles.version_for_run(run_id)
         with self.db.write() as connection:
             run = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
             if not run or run["status"] != "running":
@@ -99,7 +98,16 @@ class Ingestor:
                     product = Product.parse(profile.normalize(record))
                     if product.revision > page.boundary:
                         raise ValidationError("record revision exceeds snapshot boundary")
-                    outcome = self.merger.merge(connection, run["source_id"], run_id, product)
+                    outcome = self.merger.merge(
+                        connection,
+                        run["source_id"],
+                        run_id,
+                        product,
+                        rule_version,
+                        source_fingerprint=self.merger.source_fingerprint(profile.parser, record),
+                        parser=profile.parser,
+                        raw_record=record,
+                    )
                 except ValidationError as error:
                     counts["rejected"] += 1
                     connection.execute(

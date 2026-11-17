@@ -72,6 +72,27 @@ def parser():
     delta = commands.add_parser("delta")
     delta.add_argument("source")
     delta.add_argument("file")
+    reprocess = commands.add_parser("reprocess")
+    reprocess.add_argument("source")
+    reprocess.add_argument("--profile-version", type=int)
+    reprocess.add_argument("--run")
+    reprocess_resume = commands.add_parser("reprocess-resume")
+    reprocess_resume.add_argument("job")
+    reprocess_cancel = commands.add_parser("reprocess-cancel")
+    reprocess_cancel.add_argument("job")
+    reprocess_jobs = commands.add_parser("reprocess-jobs")
+    reprocess_jobs.add_argument("--source")
+    reprocess_job = commands.add_parser("reprocess-job")
+    reprocess_job.add_argument("job")
+    reprocess_pages = commands.add_parser("reprocess-pages")
+    reprocess_pages.add_argument("job")
+    reprocess_rejects = commands.add_parser("reprocess-rejects")
+    reprocess_rejects.add_argument("job")
+    reprocess_balance = commands.add_parser("reprocess-balance")
+    reprocess_balance.add_argument("job")
+    reprocess_page = commands.add_parser("reprocess-page")
+    reprocess_page.add_argument("job")
+    reprocess_page.add_argument("ordinal", type=int)
     runs = commands.add_parser("runs")
     runs.add_argument("--source")
     run = commands.add_parser("run")
@@ -169,6 +190,24 @@ def execute(args):
     if command == "delta":
         records = json.loads(Path(args.file).read_text(encoding="utf-8"))
         return app.ingest.apply_delta(args.source, records)
+    if command == "reprocess":
+        return app.reprocess.start(args.source, args.profile_version, args.run)
+    if command == "reprocess-resume":
+        return app.reprocess.execute(args.job)
+    if command == "reprocess-cancel":
+        return app.reprocess.cancel(args.job)
+    if command == "reprocess-jobs":
+        return app.reprocess.list(args.source)
+    if command == "reprocess-job":
+        return app.reprocess.get(args.job)
+    if command == "reprocess-pages":
+        return app.reprocess.pages(args.job)
+    if command == "reprocess-rejects":
+        return app.reprocess.rejects(args.job)
+    if command == "reprocess-balance":
+        return app.reprocess.reconcile(args.job)
+    if command == "reprocess-page":
+        return app.reprocess.page(args.job, args.ordinal)
     if command == "runs":
         return app.runs.list(args.source)
     if command == "run":

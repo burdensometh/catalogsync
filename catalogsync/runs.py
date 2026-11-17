@@ -2,8 +2,8 @@ import sqlite3
 import uuid
 
 from .errors import Conflict, NotFound
-from .models import canonical, digest, now
-from .normalization import Profile
+from .models import now
+from .profiles import Profiles
 
 
 COUNTERS = ("accepted", "rejected", "inserted", "updated", "unchanged", "stale")
@@ -12,6 +12,7 @@ COUNTERS = ("accepted", "rejected", "inserted", "updated", "unchanged", "stale")
 class Runs:
     def __init__(self, database):
         self.db = database
+        self.profiles = Profiles(database)
 
     def create(self, source_id, mode="snapshot"):
         run_id = uuid.uuid4().hex
@@ -30,19 +31,7 @@ class Runs:
                     VALUES (?, ?, ?, 'pending', '', ?)""",
                     (run_id, source_id, mode, now()),
                 )
-                configured = connection.execute(
-                    "SELECT * FROM source_profiles WHERE source_id=? ORDER BY version DESC LIMIT 1", (source_id,)
-                ).fetchone()
-                document = canonical(Profile().document())
-                version = 0
-                fingerprint = digest(Profile().document())
-                if configured:
-                    document = configured["document"]
-                    version = configured["version"]
-                    fingerprint = configured["fingerprint"]
-                connection.execute(
-                    "INSERT INTO run_profiles VALUES (?,?,?,?)", (run_id, version, document, fingerprint)
-                )
+                self.profiles.freeze(connection, source_id, run_id)
                 self.db.event(connection, "run_created", {"mode": mode}, source_id, run_id)
         except sqlite3.IntegrityError as error:
             raise Conflict("another snapshot is pending or running for this source") from error

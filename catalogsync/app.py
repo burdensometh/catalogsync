@@ -6,6 +6,7 @@ from .ingest import Ingestor
 from .publish import Publisher
 from .query import CatalogQuery
 from .registry import Registry
+from .reprocess import Reprocessor
 from .runs import Runs
 from .profiles import Profiles
 from .feed import DeltaInbox
@@ -30,3 +31,4 @@ class Application:
         self.provenance = Provenance(self)
         self.rejections = Rejections(self)
         self.file_feeds = FileFeed(self)
+        self.reprocess = Reprocessor(self)

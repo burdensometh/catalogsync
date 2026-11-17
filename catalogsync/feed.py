@@ -116,17 +116,7 @@ class DeltaInbox:
                 VALUES (?,?,'delta','pending','',?)""",
                 (run_id, batch["source_id"], now()),
             )
-            from .normalization import Profile
-            profile = connection.execute(
-                "SELECT * FROM source_profiles WHERE source_id=? ORDER BY version DESC LIMIT 1",
-                (batch["source_id"],),
-            ).fetchone()
-            if profile:
-                version, document, fingerprint = profile["version"], profile["document"], profile["fingerprint"]
-            else:
-                value = Profile().document()
-                version, document, fingerprint = 0, canonical(value), digest(value)
-            connection.execute("INSERT INTO run_profiles VALUES (?,?,?,?)", (run_id, version, document, fingerprint))
+            self.ingestor.profiles.freeze(connection, batch["source_id"], run_id)
             connection.execute("UPDATE inbox_batches SET run_id=? WHERE id=?", (run_id, batch_id))
             return run_id
 

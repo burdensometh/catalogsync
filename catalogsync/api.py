@@ -111,6 +111,18 @@ def serve(home, host="127.0.0.1", port=8761):
                     return 200, app.provenance.reconcile_counts(parts[1])
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "raw-page":
                     return 200, app.provenance.page(parts[1], query.get("cursor", [""])[0])
+                if parts == ["reprocess-jobs"]:
+                    return 200, app.reprocess.list(query.get("source", [None])[0])
+                if len(parts) == 2 and parts[0] == "reprocess-jobs":
+                    return 200, app.reprocess.get(parts[1])
+                if len(parts) == 3 and parts[0] == "reprocess-jobs" and parts[2] == "pages":
+                    return 200, app.reprocess.pages(parts[1])
+                if len(parts) == 3 and parts[0] == "reprocess-jobs" and parts[2] == "rejects":
+                    return 200, app.reprocess.rejects(parts[1])
+                if len(parts) == 3 and parts[0] == "reprocess-jobs" and parts[2] == "balance":
+                    return 200, app.reprocess.reconcile(parts[1])
+                if len(parts) == 3 and parts[0] == "reprocess-jobs" and parts[2] == "page":
+                    return 200, app.reprocess.page(parts[1], integer(query, "ordinal", 0))
                 if parts == ["summary"]:
                     return 200, app.query.summary()
                 if parts == ["events"]:
@@ -157,6 +169,16 @@ def serve(home, host="127.0.0.1", port=8761):
                     return 201, app.ingest.start(data.get("source_id"))
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resume":
                     return 200, app.ingest.execute(parts[1])
+                if parts == ["reprocess-jobs"]:
+                    return 201, app.reprocess.start(
+                        data.get("source_id"),
+                        data.get("profile_version"),
+                        data.get("run_id"),
+                    )
+                if len(parts) == 3 and parts[0] == "reprocess-jobs" and parts[2] == "resume":
+                    return 200, app.reprocess.execute(parts[1])
+                if len(parts) == 3 and parts[0] == "reprocess-jobs" and parts[2] == "cancel":
+                    return 200, app.reprocess.cancel(parts[1])
                 if parts == ["deltas"]:
                     return 201, app.ingest.apply_delta(data.get("source_id"), data.get("records"))
                 if parts == ["publications"]:

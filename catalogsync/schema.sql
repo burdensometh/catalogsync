@@ -47,10 +47,12 @@ CREATE TABLE IF NOT EXISTS pages (
     committed_at TEXT NOT NULL,
     PRIMARY KEY(run_id, cursor)
 );
+-- replays reference a run or a reprocess job as their origin; exactly one is set
 CREATE TABLE IF NOT EXISTS products (
     source_id TEXT NOT NULL REFERENCES sources(id),
     sku TEXT NOT NULL,
     revision INTEGER NOT NULL,
+    rule_version INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL,
     category TEXT NOT NULL,
     currency TEXT NOT NULL,
@@ -59,22 +61,35 @@ CREATE TABLE IF NOT EXISTS products (
     active INTEGER NOT NULL CHECK(active IN (0, 1)),
     attributes TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
-    last_run_id TEXT NOT NULL REFERENCES runs(id),
+    last_run_id TEXT REFERENCES runs(id),
+    last_job_id TEXT,
     updated_at TEXT NOT NULL,
+    CHECK ((last_run_id IS NULL) != (last_job_id IS NULL)),
     PRIMARY KEY(source_id, sku)
 );
 CREATE INDEX IF NOT EXISTS product_category ON products(category, source_id);
 CREATE INDEX IF NOT EXISTS product_revision ON products(source_id, revision);
+-- the same source revision may be observed once per cleaning-rule version;
+-- source_fingerprint identifies the raw source record independently of the
+-- cleaning rules, so a rule change cannot hide a genuine source-side conflict.
 CREATE TABLE IF NOT EXISTS product_versions (
     source_id TEXT NOT NULL REFERENCES sources(id),
     sku TEXT NOT NULL,
     revision INTEGER NOT NULL,
+    rule_version INTEGER NOT NULL DEFAULT 0,
     fingerprint TEXT NOT NULL,
+    source_fingerprint TEXT,
+    parser TEXT,
     payload TEXT NOT NULL,
-    first_run_id TEXT NOT NULL REFERENCES runs(id),
+    raw_record TEXT,
+    first_run_id TEXT REFERENCES runs(id),
+    first_job_id TEXT,
     observed_at TEXT NOT NULL,
-    PRIMARY KEY(source_id, sku, revision)
+    CHECK ((first_run_id IS NULL) != (first_job_id IS NULL)),
+    PRIMARY KEY(source_id, sku, revision, rule_version)
 );
+CREATE INDEX IF NOT EXISTS product_version_source
+ON product_versions(source_id, rule_version);
 CREATE TABLE IF NOT EXISTS rejects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL REFERENCES runs(id),
@@ -153,4 +168,76 @@ CREATE TABLE IF NOT EXISTS file_feeds (
     byte_offset INTEGER NOT NULL,
     line_count INTEGER NOT NULL,
     checked_at TEXT NOT NULL
+);
+-- reprocessing replays already-archived raw pages under one frozen rule version
+CREATE TABLE IF NOT EXISTS reprocess_jobs (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    base_run_id TEXT REFERENCES runs(id),
+    target_profile_version INTEGER NOT NULL,
+    profile_document TEXT NOT NULL,
+    profile_fingerprint TEXT NOT NULL,
+    snapshot_id TEXT,
+    boundary INTEGER,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'failed', 'completed', 'cancelled')),
+    page_total INTEGER NOT NULL DEFAULT 0,
+    next_ordinal INTEGER NOT NULL DEFAULT 0,
+    page_count INTEGER NOT NULL DEFAULT 0,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    rejected INTEGER NOT NULL DEFAULT 0,
+    inserted INTEGER NOT NULL DEFAULT 0,
+    updated INTEGER NOT NULL DEFAULT 0,
+    unchanged INTEGER NOT NULL DEFAULT 0,
+    stale INTEGER NOT NULL DEFAULT 0,
+    conflicts INTEGER NOT NULL DEFAULT 0,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    switched_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_reprocess
+ON reprocess_jobs(source_id) WHERE status IN ('pending', 'running', 'failed');
+CREATE TABLE IF NOT EXISTS reprocess_pages (
+    job_id TEXT NOT NULL REFERENCES reprocess_jobs(id),
+    ordinal INTEGER NOT NULL,
+    source_run_id TEXT NOT NULL REFERENCES runs(id),
+    cursor TEXT NOT NULL,
+    next_cursor TEXT,
+    boundary INTEGER NOT NULL,
+    raw_sha256 TEXT NOT NULL,
+    archive_path TEXT NOT NULL,
+    record_count INTEGER NOT NULL,
+    accepted INTEGER,
+    rejected INTEGER,
+    committed_at TEXT,
+    PRIMARY KEY(job_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS reprocess_records (
+    job_id TEXT NOT NULL REFERENCES reprocess_jobs(id),
+    page_ordinal INTEGER NOT NULL,
+    record_ordinal INTEGER NOT NULL,
+    sku TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    rule_version INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    parser TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    raw_record TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(job_id, page_ordinal, record_ordinal)
+);
+CREATE INDEX IF NOT EXISTS reprocess_record_version
+ON reprocess_records(job_id, sku, revision, rule_version);
+CREATE TABLE IF NOT EXISTS reprocess_rejects (
+    job_id TEXT NOT NULL REFERENCES reprocess_jobs(id),
+    page_ordinal INTEGER NOT NULL,
+    record_ordinal INTEGER NOT NULL,
+    cursor TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    raw_record TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(job_id, page_ordinal, record_ordinal)
 );
