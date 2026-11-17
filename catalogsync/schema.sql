@@ -154,3 +154,50 @@ CREATE TABLE IF NOT EXISTS file_feeds (
     line_count INTEGER NOT NULL,
     checked_at TEXT NOT NULL
 );
+-- SKUs accepted from a snapshot page. Used as the membership set of a
+-- completed snapshot so that later late records can be judged against it.
+CREATE TABLE IF NOT EXISTS snapshot_items (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    sku TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    PRIMARY KEY(run_id, sku)
+);
+CREATE INDEX IF NOT EXISTS snapshot_item_source ON snapshot_items(source_id, sku);
+-- The newest complete snapshot that is allowed to declare absence. Only
+-- snapshots whose every page committed and that contained no rejected row may
+-- advance this barrier, and the source version boundary never moves backwards.
+CREATE TABLE IF NOT EXISTS snapshot_barriers (
+    source_id TEXT PRIMARY KEY REFERENCES sources(id),
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    snapshot_id TEXT NOT NULL,
+    boundary INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+-- Current delisted state per product identity. A row means the identity is not
+-- in the effective catalogue even though its last observed version is retained.
+CREATE TABLE IF NOT EXISTS delist_states (
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    sku TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    snapshot_id TEXT NOT NULL,
+    boundary INTEGER NOT NULL,
+    delisted_at TEXT NOT NULL,
+    PRIMARY KEY(source_id, sku)
+);
+-- Append-only audit of why/when an identity was delisted: the snapshot run,
+-- its boundary, and the version that was current at the time (NULL when the
+-- identity had never been stored before).
+CREATE TABLE IF NOT EXISTS delistings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    sku TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    snapshot_id TEXT NOT NULL,
+    boundary INTEGER NOT NULL,
+    prior_revision INTEGER,
+    prior_fingerprint TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_id, sku, run_id)
+);
+CREATE INDEX IF NOT EXISTS delisting_sku ON delistings(source_id, sku);

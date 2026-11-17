@@ -89,6 +89,11 @@ def parser():
     history = commands.add_parser("history")
     history.add_argument("source")
     history.add_argument("sku")
+    delistings = commands.add_parser("delistings")
+    delistings.add_argument("--source")
+    delistings.add_argument("--sku")
+    delistings.add_argument("--limit", type=int, default=100)
+    delistings.add_argument("--offset", type=int, default=0)
     commands.add_parser("summary")
     events = commands.add_parser("events")
     events.add_argument("--after", type=int, default=0)
@@ -183,6 +188,8 @@ def execute(args):
         )
     if command == "history":
         return app.query.history(args.source, args.sku)
+    if command == "delistings":
+        return app.query.delistings(args.source, args.sku, args.limit, args.offset)
     if command == "summary":
         return app.query.summary()
     if command == "events":

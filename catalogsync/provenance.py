@@ -18,7 +18,37 @@ class Provenance:
                 JOIN runs r ON r.id=v.first_run_id
                 WHERE v.source_id=? AND v.sku=? ORDER BY v.revision""", (source_id, sku)
             )]
-        return {"current": product, "versions": versions, "first_observations": observations}
+            delisted = connection.execute(
+                "SELECT * FROM delist_states WHERE source_id=? AND sku=?", (source_id, sku)
+            ).fetchone()
+            evidence = connection.execute(
+                """SELECT * FROM delistings WHERE source_id=? AND sku=? ORDER BY id""",
+                (source_id, sku),
+            ).fetchall()
+            barrier = connection.execute(
+                "SELECT * FROM snapshot_barriers WHERE source_id=?", (source_id,)
+            ).fetchone()
+        result = {"current": product, "versions": versions, "first_observations": observations}
+        result["delisted"] = delisted is not None
+        result["delist_evidence"] = [dict(row) for row in evidence]
+        if barrier is not None:
+            result["snapshot_barrier"] = {
+                "run_id": barrier["run_id"],
+                "snapshot_id": barrier["snapshot_id"],
+                "boundary": barrier["boundary"],
+                "recorded_at": barrier["recorded_at"],
+                "in_snapshot": self._member(source_id, barrier["run_id"], sku),
+            }
+        else:
+            result["snapshot_barrier"] = None
+        return result
+
+    def _member(self, source_id, run_id, sku):
+        with self.app.database.read() as connection:
+            return connection.execute(
+                "SELECT 1 FROM snapshot_items WHERE run_id=? AND source_id=? AND sku=?",
+                (run_id, source_id, sku),
+            ).fetchone() is not None
 
     def run_profile(self, run_id):
         self.app.runs.get(run_id)

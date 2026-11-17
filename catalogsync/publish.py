@@ -51,6 +51,12 @@ class Publisher:
                     params.append(source_id)
                 if sellable_only:
                     clauses.append("active = 1 AND stock > 0")
+                # Products delisted by a complete snapshot are no longer in the
+                # effective catalogue, whether or not the export is sellable-only.
+                clauses.append(
+                    """NOT EXISTS (SELECT 1 FROM delist_states d
+                    WHERE d.source_id = products.source_id AND d.sku = products.sku)"""
+                )
                 rows = connection.execute(
                     "SELECT * FROM products WHERE " + " AND ".join(clauses)
                     + " ORDER BY source_id, sku",

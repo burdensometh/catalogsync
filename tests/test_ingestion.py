@@ -118,10 +118,13 @@ class IngestionTest(unittest.TestCase):
         with self.assertRaises(IntegrityError):
             self.app.publisher.artifact(first["id"])
 
-    def test_absence_is_not_deletion_in_baseline_contract(self):
+    def test_complete_snapshot_delists_only_absent_identities(self):
         self.app.ingest.apply_delta("s", [record(), record("y")])
         self.app.ingest.start("s", Client({"": page("", [record(revision=2)])}))
-        self.assertEqual(self.app.query.products()["total"], 2)
+        shown = {item["sku"] for item in self.app.query.products()["items"]}
+        self.assertEqual(shown, {"x"})
+        self.assertTrue(self.app.query.product("s", "y")["delisted"])
+        self.assertFalse(self.app.query.product("s", "x")["delisted"])
 
     def test_real_http_supplier_and_archive(self):
         (self.source / "manifest.json").write_text(json.dumps({"pages": {"": "p.json"}}))

@@ -102,6 +102,8 @@ class Runs:
                 "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
                 (now(), run_id),
             )
+            from .delisting import Delisting
+            Delisting().finalize(connection, dict(row))
             self.db.event(connection, "run_completed", {}, row["source_id"], run_id)
         return self.get(run_id)
 

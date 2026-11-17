@@ -17,7 +17,7 @@ class CatalogQuery:
     def __init__(self, database):
         self.db = database
 
-    def filters(self, source_id=None, category=None, sellable=False, search=None):
+    def filters(self, source_id=None, category=None, sellable=False, search=None, include_delisted=False):
         clauses = []
         params = []
         if source_id:
@@ -31,6 +31,11 @@ class CatalogQuery:
         if search:
             clauses.append("instr(lower(title), lower(?)) > 0")
             params.append(search)
+        if not include_delisted:
+            clauses.append(
+                """NOT EXISTS (SELECT 1 FROM delist_states d
+                WHERE d.source_id = products.source_id AND d.sku = products.sku)"""
+            )
         return " AND ".join(clauses) or "1 = 1", params
 
     def products(self, source_id=None, category=None, sellable=False, search=None, limit=100, offset=0):
@@ -56,7 +61,21 @@ class CatalogQuery:
             ).fetchone()
             if row is None:
                 raise NotFound("product does not exist")
-            return product_row(row)
+            value = product_row(row)
+            delisted = connection.execute(
+                "SELECT * FROM delist_states WHERE source_id = ? AND sku = ?",
+                (source_id, sku),
+            ).fetchone()
+            value["delisted"] = delisted is not None
+            if delisted is not None:
+                value["sellable"] = False
+                value["delist_basis"] = {
+                    "run_id": delisted["run_id"],
+                    "snapshot_id": delisted["snapshot_id"],
+                    "boundary": delisted["boundary"],
+                    "delisted_at": delisted["delisted_at"],
+                }
+            return value
 
     def history(self, source_id, sku):
         with self.db.read() as connection:
@@ -71,25 +90,69 @@ class CatalogQuery:
                 result.append(value)
             return result
 
+    def delistings(self, source_id=None, sku=None, limit=100, offset=0):
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValidationError("limit must be between 1 and 1000")
+        if type(offset) is not int or offset < 0:
+            raise ValidationError("offset must be nonnegative")
+        clauses = []
+        params = []
+        if source_id:
+            clauses.append("source_id = ?")
+            params.append(source_id)
+        if sku:
+            clauses.append("sku = ?")
+            params.append(sku)
+        where = " AND ".join(clauses) or "1 = 1"
+        with self.db.read() as connection:
+            total = connection.execute(
+                f"SELECT count(*) FROM delistings WHERE {where}", params
+            ).fetchone()[0]
+            rows = connection.execute(
+                f"SELECT * FROM delistings WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            )
+            states = connection.execute(
+                "SELECT * FROM delist_states"
+                + (" WHERE " + " AND ".join(clauses) if clauses else "")
+                + " ORDER BY source_id, sku",
+                params,
+            )
+            return {
+                "total": total,
+                "items": [dict(row) for row in rows],
+                "current": [dict(row) for row in states],
+            }
+
     def summary(self):
         with self.db.read() as connection:
             source_counts = connection.execute(
                 """SELECT source_id, count(*) AS products,
                 sum(CASE WHEN active = 1 AND stock > 0 THEN 1 ELSE 0 END) AS sellable,
                 max(revision) AS maximum_revision
-                FROM products GROUP BY source_id ORDER BY source_id"""
+                FROM products
+                WHERE NOT EXISTS (SELECT 1 FROM delist_states d
+                    WHERE d.source_id = products.source_id AND d.sku = products.sku)
+                GROUP BY source_id ORDER BY source_id"""
             )
             categories = connection.execute(
                 """SELECT category, currency, count(*) AS products,
                 sum(price_cents * stock) AS stock_value_cents
-                FROM products GROUP BY category, currency ORDER BY category, currency"""
+                FROM products
+                WHERE NOT EXISTS (SELECT 1 FROM delist_states d
+                    WHERE d.source_id = products.source_id AND d.sku = products.sku)
+                GROUP BY category, currency ORDER BY category, currency"""
             ).fetchall()
+            delisted = connection.execute(
+                "SELECT count(*) FROM delist_states"
+            ).fetchone()[0]
             return {
                 "sources": [dict(row) for row in source_counts],
                 "categories": [dict(row) for row in categories],
                 "runs": dict(connection.execute(
                     "SELECT status, count(*) FROM runs GROUP BY status"
                 ).fetchall()),
+                "delisted": delisted,
             }
 
     def events(self, after=0, limit=100):

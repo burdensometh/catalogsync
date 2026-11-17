@@ -44,6 +44,31 @@ class Diagnostics:
                     issues.append({"kind": "product_provenance", "sku": row["sku"]})
                 elif digest(json.loads(version["payload"])) != row["fingerprint"]:
                     issues.append({"kind": "version_checksum", "sku": row["sku"]})
+            for row in connection.execute("SELECT * FROM delist_states"):
+                barrier = connection.execute(
+                    "SELECT * FROM snapshot_barriers WHERE source_id = ?",
+                    (row["source_id"],),
+                ).fetchone()
+                if barrier is None:
+                    issues.append({"kind": "delist_without_barrier", "sku": row["sku"]})
+                    continue
+                if (row["run_id"], row["boundary"]) != (barrier["run_id"], barrier["boundary"]):
+                    issues.append({"kind": "delist_stale_basis", "sku": row["sku"]})
+                if connection.execute(
+                    "SELECT 1 FROM snapshot_items WHERE run_id = ? AND sku = ?",
+                    (barrier["run_id"], row["sku"]),
+                ).fetchone():
+                    issues.append({"kind": "delist_member_present", "sku": row["sku"]})
+                if connection.execute(
+                    "SELECT 1 FROM products WHERE source_id = ? AND sku = ? AND revision > ?",
+                    (row["source_id"], row["sku"], barrier["boundary"]),
+                ).fetchone():
+                    issues.append({"kind": "delist_newer_version", "sku": row["sku"]})
+                if not connection.execute(
+                    "SELECT 1 FROM delistings WHERE source_id = ? AND sku = ? AND run_id = ?",
+                    (row["source_id"], row["sku"], row["run_id"]),
+                ).fetchone():
+                    issues.append({"kind": "delist_without_evidence", "sku": row["sku"]})
             pages = [dict(row) for row in connection.execute("SELECT * FROM pages")]
         archives = self.archive.verify(pages) if verify_archives else []
         for result in archives:

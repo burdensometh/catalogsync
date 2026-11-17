@@ -120,6 +120,13 @@ def serve(home, host="127.0.0.1", port=8761):
                     )
                 if parts == ["publications"]:
                     return 200, app.publisher.list()
+                if parts == ["delistings"]:
+                    return 200, app.query.delistings(
+                        query.get("source", [None])[0],
+                        query.get("sku", [None])[0],
+                        integer(query, "limit", 100, 1),
+                        integer(query, "offset", 0, maximum=10**9),
+                    )
                 if len(parts) == 2 and parts[0] == "publications":
                     return 200, app.publisher.get(parts[1])
                 if len(parts) == 3 and parts[0] == "publications" and parts[2] == "artifact":

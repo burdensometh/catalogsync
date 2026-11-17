@@ -2,6 +2,7 @@ import json
 
 from .archive import Archive
 from .clients import client_for, decode_page
+from .delisting import Delisting
 from .errors import CatalogError, Conflict, ValidationError
 from .merge import ProductMerger
 from .models import Page, Product, canonical, now
@@ -18,6 +19,7 @@ class Ingestor:
         self.registry = Registry(database)
         self.runs = Runs(database)
         self.merger = ProductMerger()
+        self.delisting = Delisting()
         self.profiles = Profiles(database)
 
     def start(self, source_id, client=None):
@@ -94,11 +96,19 @@ class Ingestor:
             if run["snapshot_id"] is not None:
                 if (run["snapshot_id"], run["boundary"]) != (page.snapshot_id, page.boundary):
                     raise ValidationError("snapshot identity changed during pagination")
+            snapshot = run["mode"] == "snapshot"
             for ordinal, record in enumerate(page.records):
+                sku = None
+                existed_before = True
                 try:
                     product = Product.parse(profile.normalize(record))
+                    sku = product.sku
                     if product.revision > page.boundary:
                         raise ValidationError("record revision exceeds snapshot boundary")
+                    existed_before = connection.execute(
+                        "SELECT 1 FROM products WHERE source_id = ? AND sku = ?",
+                        (run["source_id"], sku),
+                    ).fetchone() is not None
                     outcome = self.merger.merge(connection, run["source_id"], run_id, product)
                 except ValidationError as error:
                     counts["rejected"] += 1
@@ -111,6 +121,18 @@ class Ingestor:
                 else:
                     counts["accepted"] += 1
                     counts[outcome] += 1
+                    if snapshot:
+                        # Membership of the snapshot, recorded page by page so a
+                        # resumed run retains what earlier pages established.
+                        self.delisting.record_item(
+                            connection, run_id, run["source_id"], sku, product.revision
+                        )
+                    # A late record for an identity the active snapshot barrier
+                    # already excludes must not bring it back, including a SKU
+                    # that had never been stored before this observation.
+                    self.delisting.sync(
+                        connection, run["source_id"], sku, prior_known=existed_before
+                    )
             connection.execute(
                 """INSERT INTO pages
                 (run_id, cursor, next_cursor, raw_sha256, archive_path,
