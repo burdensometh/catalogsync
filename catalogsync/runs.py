@@ -9,6 +9,24 @@ from .normalization import Profile
 COUNTERS = ("accepted", "rejected", "inserted", "updated", "unchanged", "stale")
 
 
+def freeze_profile(connection, source_id, run_id):
+    configured = connection.execute(
+        "SELECT * FROM source_profiles WHERE source_id=? ORDER BY version DESC LIMIT 1", (source_id,)
+    ).fetchone()
+    if configured:
+        document = configured["document"]
+        version = configured["version"]
+        fingerprint = configured["fingerprint"]
+    else:
+        value = Profile().document()
+        document = canonical(value)
+        version = 0
+        fingerprint = digest(value)
+    connection.execute(
+        "INSERT INTO run_profiles VALUES (?,?,?,?)", (run_id, version, document, fingerprint)
+    )
+
+
 class Runs:
     def __init__(self, database):
         self.db = database
@@ -30,19 +48,7 @@ class Runs:
                     VALUES (?, ?, ?, 'pending', '', ?)""",
                     (run_id, source_id, mode, now()),
                 )
-                configured = connection.execute(
-                    "SELECT * FROM source_profiles WHERE source_id=? ORDER BY version DESC LIMIT 1", (source_id,)
-                ).fetchone()
-                document = canonical(Profile().document())
-                version = 0
-                fingerprint = digest(Profile().document())
-                if configured:
-                    document = configured["document"]
-                    version = configured["version"]
-                    fingerprint = configured["fingerprint"]
-                connection.execute(
-                    "INSERT INTO run_profiles VALUES (?,?,?,?)", (run_id, version, document, fingerprint)
-                )
+                freeze_profile(connection, source_id, run_id)
                 self.db.event(connection, "run_created", {"mode": mode}, source_id, run_id)
         except sqlite3.IntegrityError as error:
             raise Conflict("another snapshot is pending or running for this source") from error

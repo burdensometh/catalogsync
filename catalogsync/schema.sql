@@ -154,3 +154,35 @@ CREATE TABLE IF NOT EXISTS file_feeds (
     line_count INTEGER NOT NULL,
     checked_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS crawls (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES sources(id),
+    run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'failed', 'completed')),
+    seed_url TEXT NOT NULL,
+    max_items INTEGER NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_crawl
+ON crawls(source_id) WHERE status IN ('pending', 'running');
+CREATE TABLE IF NOT EXISTS crawl_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    crawl_id TEXT NOT NULL REFERENCES crawls(id),
+    url TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending', 'completed', 'failed')),
+    depth INTEGER NOT NULL,
+    parent_id INTEGER REFERENCES crawl_items(id),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    records INTEGER NOT NULL DEFAULT 0,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    rejected INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT,
+    UNIQUE(crawl_id, url)
+);
+CREATE INDEX IF NOT EXISTS crawl_frontier ON crawl_items(crawl_id, state, id);

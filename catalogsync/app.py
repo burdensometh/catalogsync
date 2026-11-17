@@ -2,6 +2,7 @@ from pathlib import Path
 
 from .database import Database
 from .diagnostics import Diagnostics
+from .crawler import Crawler
 from .ingest import Ingestor
 from .publish import Publisher
 from .query import CatalogQuery
@@ -23,6 +24,8 @@ class Application:
         self.runs = Runs(self.database)
         self.profiles = Profiles(self.database)
         self.ingest = Ingestor(self.database, self.home / "archive")
+        self.crawler = Crawler(self.database, self.home / "archive")
+        self.crawls = self.crawler.crawls
         self.inbox = DeltaInbox(self.database, self.ingest)
         self.query = CatalogQuery(self.database)
         self.publisher = Publisher(self.database, self.home / "datasets")

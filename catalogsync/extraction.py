@@ -17,6 +17,7 @@ class ListingParser(HTMLParser):
         self.field_depth = None
         self.field_text = []
         self.next_cursor = None
+        self.links = []
         self.scripts = []
         self.script = None
         self.errors = []
@@ -38,6 +39,12 @@ class ListingParser(HTMLParser):
                 if self.next_cursor is not None:
                     self.errors.append("duplicate next cursor")
                 self.next_cursor = cursor
+        if tag == "a":
+            href = attributes.get("href")
+            if href is not None:
+                self.links.append(href)
+                if len(self.links) == 10001:
+                    self.errors.append("page declares too many links")
         if tag == "article" and "data-sku" in attributes:
             if self.current is not None:
                 self.errors.append("nested product articles are unsupported")
@@ -182,3 +189,45 @@ def extract_page(raw, parser, cursor):
     else:
         raise ValidationError("unknown extraction parser")
     return envelope
+
+
+def extract_crawl_page(raw, parser):
+    """Extract discovered links and product records from one crawled page.
+
+    Unlike extract_page there is no catalog envelope: the crawl round itself
+    provides page identity, so ordinary site pages without catalog:*
+    metadata can be parsed. Returns {"links": [...], "records": [...]}.
+    """
+    if parser == "json":
+        value = decode_page(raw)
+        records = value.get("records", [])
+        if not isinstance(records, list):
+            raise ValidationError("records must be an array")
+        if len(records) > 10000:
+            raise ValidationError("page exceeds 10000 records")
+        links = value.get("links", [])
+        if not isinstance(links, list) or len(links) > 10000:
+            raise ValidationError("links must be an array of up to 10000 entries")
+        if any(not isinstance(link, str) for link in links):
+            raise ValidationError("links must be strings")
+        return {"links": list(links), "records": records}
+    try:
+        html = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValidationError("HTML source must use UTF-8") from None
+    listing = ListingParser()
+    listing.feed(html)
+    listing.close()
+    if listing.errors:
+        raise ValidationError("; ".join(listing.errors))
+    if listing.current is not None or listing.script is not None:
+        raise ValidationError("incomplete HTML listing")
+    if parser == "html":
+        records = [html_scalar(record) for record in listing.records]
+    elif parser == "jsonld":
+        records = jsonld_products(listing.scripts)
+    else:
+        raise ValidationError("unknown extraction parser")
+    if len(records) > 10000:
+        raise ValidationError("page exceeds 10000 records")
+    return {"links": list(listing.links), "records": records}

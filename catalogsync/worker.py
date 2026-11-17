@@ -31,9 +31,9 @@ class Collector:
             pending = [run for run in previous if run["mode"] == "snapshot" and run["status"] == "pending"]
             failed = [run for run in previous if run["mode"] == "snapshot" and run["status"] == "failed"]
             if pending:
-                run = self.app.ingest.execute(pending[0]["id"])
+                run = self.resume_run(pending[0])
             elif failed and previous and failed[0]["id"] == previous[0]["id"]:
-                run = self.app.ingest.execute(failed[0]["id"])
+                run = self.resume_run(failed[0])
             else:
                 run = self.app.ingest.start(source_id)
             inbox = self.app.inbox.consume(source_id)
@@ -46,6 +46,12 @@ class Collector:
             return {"source_id": source_id, "status": "conflict", "error": str(error)}
         except (CatalogError, OSError, ValueError) as error:
             return {"source_id": source_id, "status": "failed", "error": str(error)}
+
+    def resume_run(self, run):
+        crawl = self.app.crawls.for_run(run["id"])
+        if crawl is not None:
+            return self.app.crawler.execute(crawl["id"])
+        return self.app.ingest.execute(run["id"])
 
     def cycle(self):
         sources = [source for source in self.app.registry.list() if source["enabled"]]

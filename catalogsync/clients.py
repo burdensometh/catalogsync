@@ -6,6 +6,7 @@ import json
 import time
 
 from .errors import FetchError, ValidationError
+from .urlnorm import canonicalize, origin
 
 
 MAX_PAGE_BYTES = 8 * 1024 * 1024
@@ -61,6 +62,32 @@ class SameOriginRedirect(HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, msg, headers, newurl)
 
 
+def http_get(opener, gate, url, accept, timeout, attempts):
+    last_error = None
+    for attempt in range(attempts):
+        request = Request(
+            url,
+            headers={"Accept": accept, "User-Agent": "CatalogSync/0.1"},
+        )
+        try:
+            with gate.permit(), opener.open(request, timeout=timeout) as response:
+                raw = response.read(MAX_PAGE_BYTES + 1)
+                if len(raw) > MAX_PAGE_BYTES:
+                    raise FetchError("HTTP page exceeds size limit")
+                return raw
+        except HTTPError as error:
+            last_error = f"HTTP {error.code}"
+            gate.delay(gate.policy.retry_after(error.headers.get("Retry-After")))
+            error.close()
+            if error.code not in {408, 429, 500, 502, 503, 504}:
+                raise FetchError(last_error) from error
+        except (URLError, TimeoutError, OSError) as error:
+            last_error = str(error)
+        if attempt + 1 < attempts:
+            time.sleep(0.05 * 2**attempt)
+    raise FetchError(f"source fetch exhausted {attempts} attempts: {last_error}")
+
+
 class HttpClient:
     def __init__(self, base_url, timeout=10, attempts=3):
         self.base_url = base_url.rstrip("/")
@@ -72,29 +99,31 @@ class HttpClient:
 
     def fetch(self, cursor):
         url = self.base_url + "/catalog?" + urlencode({"cursor": cursor})
-        last_error = None
-        for attempt in range(self.attempts):
-            request = Request(
-                url,
-                headers={"Accept": "application/json", "User-Agent": "CatalogSync/0.1"},
-            )
-            try:
-                with self.gate.permit(), self.opener.open(request, timeout=self.timeout) as response:
-                    raw = response.read(MAX_PAGE_BYTES + 1)
-                    if len(raw) > MAX_PAGE_BYTES:
-                        raise FetchError("HTTP page exceeds size limit")
-                    return raw
-            except HTTPError as error:
-                last_error = f"HTTP {error.code}"
-                self.gate.delay(self.gate.policy.retry_after(error.headers.get("Retry-After")))
-                error.close()
-                if error.code not in {408, 429, 500, 502, 503, 504}:
-                    raise FetchError(last_error) from error
-            except (URLError, TimeoutError, OSError) as error:
-                last_error = str(error)
-            if attempt + 1 < self.attempts:
-                time.sleep(0.05 * 2**attempt)
-        raise FetchError(f"source fetch exhausted {self.attempts} attempts: {last_error}")
+        return http_get(self.opener, self.gate, url, "application/json", self.timeout, self.attempts)
+
+
+class CrawlClient:
+    """Fetches absolute crawl URLs confined to the seed's origin."""
+
+    def __init__(self, seed_url, timeout=10, attempts=3):
+        seed = canonicalize(seed_url)
+        if seed is None:
+            raise ValidationError("crawl seed must be an HTTP or HTTPS URL")
+        self.seed = seed
+        self.origin = origin(seed)
+        self.timeout = timeout
+        self.attempts = attempts
+        self.opener = build_opener(SameOriginRedirect())
+        from .request_policy import gate_for
+        self.gate = gate_for(seed)
+
+    def fetch(self, url):
+        if origin(url) != self.origin:
+            raise FetchError("crawl URL escapes the seed origin")
+        return http_get(
+            self.opener, self.gate, url,
+            "text/html, application/json", self.timeout, self.attempts,
+        )
 
 
 def client_for(source):

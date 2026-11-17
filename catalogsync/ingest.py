@@ -2,6 +2,7 @@ import json
 
 from .archive import Archive
 from .clients import client_for, decode_page
+from .crawls import Crawls
 from .errors import CatalogError, Conflict, ValidationError
 from .merge import ProductMerger
 from .models import Page, Product, canonical, now
@@ -17,6 +18,7 @@ class Ingestor:
         self.archive = Archive(archive_root)
         self.registry = Registry(database)
         self.runs = Runs(database)
+        self.crawls = Crawls(database)
         self.merger = ProductMerger()
         self.profiles = Profiles(database)
 
@@ -28,6 +30,8 @@ class Ingestor:
         run = self.runs.get(run_id)
         if run["status"] == "completed":
             return run
+        if self.crawls.for_run(run_id) is not None:
+            raise Conflict("run belongs to a crawl; resume the crawl instead")
         run = self.runs.claim(run_id)
         try:
             source = self.registry.get(run["source_id"])

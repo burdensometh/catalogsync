@@ -34,6 +34,38 @@ class Diagnostics:
                     issues.append({"kind": "reject_totals", "run_id": run["id"]})
                 if run["status"] == "completed" and run["next_cursor"] is not None:
                     issues.append({"kind": "completed_cursor", "run_id": run["id"]})
+            for row in connection.execute("SELECT * FROM crawls"):
+                crawl = dict(row)
+                run = connection.execute(
+                    "SELECT status FROM runs WHERE id = ?", (crawl["run_id"],)
+                ).fetchone()
+                if run is None:
+                    issues.append({"kind": "crawl_run_missing", "crawl_id": crawl["id"]})
+                elif crawl["status"] != run["status"]:
+                    issues.append({"kind": "crawl_run_status", "crawl_id": crawl["id"]})
+                states = {
+                    item[0]: item[1] for item in connection.execute(
+                        "SELECT state, count(*) FROM crawl_items WHERE crawl_id = ? GROUP BY state",
+                        (crawl["id"],),
+                    )
+                }
+                if crawl["status"] == "completed" and (
+                    states.get("pending") or states.get("failed")
+                ):
+                    issues.append({"kind": "crawl_unfinished_items", "crawl_id": crawl["id"]})
+                page_rows = connection.execute(
+                    "SELECT count(*) FROM pages WHERE run_id = ?", (crawl["run_id"],)
+                ).fetchone()[0]
+                if page_rows != states.get("completed", 0):
+                    issues.append({"kind": "crawl_page_items", "crawl_id": crawl["id"]})
+                orphans = connection.execute(
+                    """SELECT count(*) FROM crawl_items i
+                    LEFT JOIN crawl_items p ON p.id = i.parent_id
+                    WHERE i.crawl_id = ? AND i.parent_id IS NOT NULL AND p.id IS NULL""",
+                    (crawl["id"],),
+                ).fetchone()[0]
+                if orphans:
+                    issues.append({"kind": "crawl_parent_missing", "crawl_id": crawl["id"]})
             for row in connection.execute("SELECT * FROM products"):
                 version = connection.execute(
                     """SELECT fingerprint, payload FROM product_versions

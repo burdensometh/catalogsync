@@ -33,10 +33,18 @@ class Database:
                 "INSERT OR IGNORE INTO schema_version VALUES (?, ?)",
                 (1, now()),
             )
-            versions = connection.execute(
-                "SELECT version FROM schema_version ORDER BY version"
-            ).fetchall()
-            if [row[0] for row in versions] != [1]:
+            versions = [
+                row[0] for row in connection.execute(
+                    "SELECT version FROM schema_version ORDER BY version"
+                ).fetchall()
+            ]
+            if versions == [1]:
+                connection.execute(
+                    "INSERT INTO schema_version VALUES (?, ?)",
+                    (2, now()),
+                )
+                versions = [1, 2]
+            if versions != [1, 2]:
                 raise Conflict("unsupported database schema")
         finally:
             connection.close()

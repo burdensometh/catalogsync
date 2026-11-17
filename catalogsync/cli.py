@@ -69,6 +69,19 @@ def parser():
     pull.add_argument("source")
     resume = commands.add_parser("resume")
     resume.add_argument("run")
+    crawl = commands.add_parser("crawl")
+    crawl.add_argument("source")
+    crawl.add_argument("--max-items", type=int, default=1000)
+    crawl.add_argument("--publish", action="store_true")
+    crawl_resume = commands.add_parser("crawl-resume")
+    crawl_resume.add_argument("crawl")
+    crawls = commands.add_parser("crawls")
+    crawls.add_argument("--source")
+    crawl_items = commands.add_parser("crawl-items")
+    crawl_items.add_argument("crawl")
+    chain = commands.add_parser("crawl-chain")
+    chain.add_argument("crawl")
+    chain.add_argument("item", type=int)
     delta = commands.add_parser("delta")
     delta.add_argument("source")
     delta.add_argument("file")
@@ -119,7 +132,7 @@ def execute(args):
     app = Application(args.home)
     command = args.command
     if command == "init":
-        return {"home": str(app.home), "schema": 1}
+        return {"home": str(app.home), "schema": 2}
     if command == "source-add":
         return app.registry.register(args.id, args.name or args.id, args.kind, args.location)
     if command == "sources":
@@ -166,6 +179,19 @@ def execute(args):
         return app.ingest.start(args.source)
     if command == "resume":
         return app.ingest.execute(args.run)
+    if command == "crawl":
+        result = app.crawler.start(args.source, args.max_items)
+        if args.publish:
+            return {"crawl": result, "publication": app.publisher.publish(args.source)}
+        return result
+    if command == "crawl-resume":
+        return app.crawler.execute(args.crawl)
+    if command == "crawls":
+        return app.crawls.list(args.source)
+    if command == "crawl-items":
+        return app.crawls.items(args.crawl)
+    if command == "crawl-chain":
+        return app.provenance.crawl_chain(args.crawl, args.item)
     if command == "delta":
         records = json.loads(Path(args.file).read_text(encoding="utf-8"))
         return app.ingest.apply_delta(args.source, records)

@@ -18,6 +18,8 @@ python3 -m catalogsync --home /tmp/catalogsync-state serve --host 0.0.0.0 --port
 
 分页来源 → 原始页归档 → JSON/HTML/JSON-LD提取 → 冻结的来源映射与质量规则 → 版本归并 → 事务提交商品及进度 → 不可变数据集发布 → 独立SQLite消费端物化。
 
+只提供目录入口的站点走发现式抓取：种子页 → 同源链接发现 → 持久化抓取队列 → 详情页复用同一解析、版本归并与发布链路。
+
 增量入口包括直接提交记录、带事件ID的持久化收件箱及追加式NDJSON事件文件。收件箱保留事件处理结果，事件身份冲突被拒绝；文件入口等待完整换行并保存字节偏移，文件替换或截断不会静默重置进度。
 
 ## 来源协议
@@ -29,6 +31,16 @@ JSON页包含snapshot_id、boundary、cursor、next_cursor及records。相同快
 同一来源的revision和boundary使用同一可比较的源端版本序。boundary是完整快照的源端截点，记录revision不得超过它；不是抓取时间或本地收件序号。来源保证该snapshot_id的分页集合稳定。不同来源的版本不比较。
 
 HTML来源在meta中提供catalog:snapshot、catalog:boundary及可选catalog:cursor；下一页使用`link rel="next" data-cursor="..."`。商品article通过data-sku、data-revision及data-field标注。JSON-LD支持Product、@graph和ItemList，用catalogRevision表达来源版本，offers提供价格及可选inventoryLevel。
+
+## 发现式抓取
+
+对只给目录入口的HTTP来源，`crawl`以来源地址为种子页启动一轮抓取：解析每页的`<a href>`（JSON页使用links数组），规范化后入队，逐页提取商品记录并事务提交。规则如下。
+
+- 链接规范化去掉片段和utm_*跟踪参数，仅这些部分不同的链接合并为同一抓取项；sku等业务查询参数保留，不同取值是不同抓取项。同一轮内循环链接和重复发现只处理一次。
+- 只抓取与种子同scheme、同主机、同端口的页面；跨源链接和跨源重定向被拒绝。
+- 每页的商品提交、发现链接入队和抓取项状态在同一事务内完成。请求或解析失败的详情项记为failed而不是完成；进程中断后`crawl-resume`（或collect续跑）从未完成项继续，已完成项不重抓，重复交付不重复落库。
+- 一轮完成后再执行`crawl`开启新一轮：已完成页面会重新访问，版本归并决定更新或不变。映射与质量策略在轮次创建时冻结。
+- 抓取项记录parent_id发现链，`crawl-chain`与raw-page输出把每个归档页面追溯到种子；`--max-items`限制单轮规模（默认1000，上限10000）。
 
 ## 基线行为
 
@@ -48,6 +60,12 @@ python3 -m catalogsync --home /tmp/state products --source supplier
 python3 -m catalogsync --home /tmp/state publish --source supplier
 python3 -m catalogsync --home /tmp/state check --archives
 python3 -m catalogsync --home /tmp/state collect --workers 2 --publish
+python3 -m catalogsync --home /tmp/state source-add shop http://supplier.example --kind http
+python3 -m catalogsync --home /tmp/state profile-set shop profile.json
+python3 -m catalogsync --home /tmp/state crawl shop --publish
+python3 -m catalogsync --home /tmp/state crawls --source shop
+python3 -m catalogsync --home /tmp/state crawl-items <crawl-id>
+python3 -m catalogsync --home /tmp/state crawl-chain <crawl-id> <item-id>
 ```
 
 使用`python3 -m catalogsync --help`查看映射、来源事件、追加文件、拒绝行回放及消费端操作。HTTP接口与CLI调用同一领域服务。服务无身份认证，默认仅监听127.0.0.1，用于可信隔离网络，不直接暴露公网。

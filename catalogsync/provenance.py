@@ -39,12 +39,16 @@ class Provenance:
             raise NotFound("page does not exist")
         raw = self.app.ingest.archive.read(page["archive_path"], page["raw_sha256"])
         profile = self.run_profile(run_id)
-        from .extraction import extract_page
+        from .extraction import extract_crawl_page, extract_page
         run = self.app.runs.get(run_id)
-        parser = "json" if run["mode"] == "delta" else profile["document"]["parser"]
-        payload = extract_page(raw, parser, cursor)
+        crawl = self.app.crawls.for_run(run_id)
+        if crawl is not None:
+            payload = extract_crawl_page(raw, profile["document"]["parser"])
+        else:
+            parser = "json" if run["mode"] == "delta" else profile["document"]["parser"]
+            payload = extract_page(raw, parser, cursor)
         rejected = {row["ordinal"]: row["reason"] for row in self.app.runs.rejects(run_id, 100000) if row["cursor"] == cursor}
-        return {
+        result = {
             "page": page,
             "profile": profile,
             "records": [
@@ -52,6 +56,32 @@ class Provenance:
                 for index, record in enumerate(payload["records"])
             ],
         }
+        if crawl is not None:
+            item = self.app.crawls.item_by_url(crawl["id"], cursor)
+            result["crawl"] = {
+                "id": crawl["id"],
+                "item": item,
+                "chain": self.crawl_chain(crawl["id"], item["id"])["chain"] if item else [],
+            }
+        return result
+
+    def crawl_chain(self, crawl_id, item_id):
+        self.app.crawls.get(crawl_id)
+        item = self.app.crawls.item(crawl_id, item_id)
+        chain = []
+        seen = set()
+        while item is not None:
+            if item["id"] in seen:
+                raise IntegrityError("crawl discovery chain contains a cycle")
+            seen.add(item["id"])
+            chain.append(item)
+            item = (
+                self.app.crawls.item(crawl_id, item["parent_id"])
+                if item["parent_id"] is not None
+                else None
+            )
+        chain.reverse()
+        return {"crawl_id": crawl_id, "chain": chain}
 
     def reconcile_counts(self, run_id):
         run = self.app.runs.get(run_id)

@@ -68,7 +68,7 @@ def serve(home, host="127.0.0.1", port=8761):
             app = application
             if method == "GET":
                 if parts == ["health"]:
-                    return 200, {"service": "catalogsync", "schema": 1}
+                    return 200, {"service": "catalogsync", "schema": 2}
                 if parts == ["sources"]:
                     return 200, app.registry.list()
                 if parts == ["rejections"]:
@@ -99,6 +99,14 @@ def serve(home, host="127.0.0.1", port=8761):
                     return 200, app.provenance.explain(parts[1], parts[2])
                 if parts == ["runs"]:
                     return 200, app.runs.list(query.get("source", [None])[0])
+                if parts == ["crawls"]:
+                    return 200, app.crawls.list(query.get("source", [None])[0])
+                if len(parts) == 2 and parts[0] == "crawls":
+                    return 200, app.crawls.get(parts[1])
+                if len(parts) == 3 and parts[0] == "crawls" and parts[2] == "items":
+                    return 200, app.crawls.items(parts[1])
+                if len(parts) == 4 and parts[0] == "crawls" and parts[2] == "items":
+                    return 200, app.provenance.crawl_chain(parts[1], int(parts[3]))
                 if len(parts) == 2 and parts[0] == "runs":
                     return 200, app.runs.get(parts[1])
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "pages":
@@ -157,6 +165,12 @@ def serve(home, host="127.0.0.1", port=8761):
                     return 201, app.ingest.start(data.get("source_id"))
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resume":
                     return 200, app.ingest.execute(parts[1])
+                if parts == ["crawls"]:
+                    return 201, app.crawler.start(
+                        data.get("source_id"), data.get("max_items", 1000)
+                    )
+                if len(parts) == 3 and parts[0] == "crawls" and parts[2] == "resume":
+                    return 200, app.crawler.execute(parts[1])
                 if parts == ["deltas"]:
                     return 201, app.ingest.apply_delta(data.get("source_id"), data.get("records"))
                 if parts == ["publications"]:
