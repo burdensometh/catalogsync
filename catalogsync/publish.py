@@ -140,6 +140,8 @@ class Publisher:
         path = (self.root / record["output_path"]).resolve()
         if not path.is_relative_to(self.root) or not path.is_file():
             raise IntegrityError("publication file is missing")
+        if self.file_hash(path) != record["sha256"]:
+            raise IntegrityError("publication file checksum mismatch")
         return path
 
     def diff(self, first_id, second_id):
