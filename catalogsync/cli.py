@@ -10,8 +10,19 @@ from .errors import CatalogError
 def parser():
     root = argparse.ArgumentParser(prog="catalogsync", description="Supplier catalogue ingestion")
     root.add_argument("--home", default="var", help="local state directory")
+    root.add_argument("--rate", type=float, default=None,
+                      help="requests per second shared by every executor of one origin")
+    root.add_argument("--burst", type=int, default=None,
+                      help="maximum burst tokens shared by every executor of one origin")
+    root.add_argument("--concurrency", type=int, default=None,
+                      help="concurrent request limit shared by every executor of one origin")
+    root.add_argument("--permit-timeout", type=float, default=None,
+                      help="seconds to wait for request admission")
+    root.add_argument("--max-retry-after", type=float, default=None,
+                      help="upper bound applied to Retry-After delays")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
+    commands.add_parser("admission")
     add = commands.add_parser("source-add")
     add.add_argument("id")
     add.add_argument("location")
@@ -115,11 +126,27 @@ def parser():
     return root
 
 
+def request_policy(args):
+    from .request_policy import RequestPolicy
+    fields = {
+        "requests_per_second": args.rate,
+        "burst": args.burst,
+        "concurrency": args.concurrency,
+        "permit_timeout": args.permit_timeout,
+        "maximum_retry_after": args.max_retry_after,
+    }
+    supplied = {key: value for key, value in fields.items() if value is not None}
+    return RequestPolicy(**supplied) if supplied else None
+
+
 def execute(args):
-    app = Application(args.home)
+    app = Application(args.home, request_policy=request_policy(args))
     command = args.command
     if command == "init":
         return {"home": str(app.home), "schema": 1}
+    if command == "admission":
+        from .request_policy import admission_status
+        return {"origins": admission_status(app.home)}
     if command == "source-add":
         return app.registry.register(args.id, args.name or args.id, args.kind, args.location)
     if command == "sources":
@@ -199,7 +226,7 @@ def execute(args):
         return app.diagnostics.check(args.archives)
     if command == "serve":
         from .api import serve
-        server = serve(args.home, args.host, args.port)
+        server = serve(args.home, args.host, args.port, request_policy=request_policy(args))
         print(json.dumps({"listening": server.server_address}), flush=True)
         try:
             server.serve_forever()

@@ -22,7 +22,18 @@ python3 -m catalogsync --home /tmp/catalogsync-state serve --host 0.0.0.0 --port
 
 ## 来源协议
 
-文件来源目录包含manifest.json，其pages对象将cursor映射到相对页文件。初始cursor为空字符串。HTTP来源使用`GET <base>/catalog?cursor=...`，按来源限速、限制并发并处理临时错误和Retry-After。
+文件来源目录包含manifest.json，其pages对象将cursor映射到相对页文件。初始cursor为空字符串。HTTP来源使用`GET <base>/catalog?cursor=...`，按来源限速、限制并发并处理临时错误和Retry-After。重试与首次请求一样占用一次准入额度。
+
+## 跨进程请求准入
+
+同一home下的多个采集进程共同遵守一份按源站（scheme、主机、端口）划分的请求预算。`--rate`、`--burst`、`--concurrency`、`--max-retry-after`设定速率、突发量、并发上限和Retry-After上限；`--permit-timeout`只控制本进程等待准入的时间，不属于共享身份。
+
+- 令牌桶、Retry-After冷却截止时间与准入计数保存在`<home>/request_admission/<origin>/state.json`，进程间用文件锁串行读改写。重试请求同样消耗令牌，Retry-After期间所有进程一起暂停。
+- 并发名额是持有式文件锁：请求在途期间锁一直被占用，进程退出或被强制终止后由内核回收，不会被误判为空闲。
+- 不同源站各有独立状态，互不拖累。
+- 同一源站若已有不同速率/突发/并发/Retry-After配置，构建客户端（发请求之前）即被拒绝，不消耗采集尝试也不推进cursor。
+- 等待准入超时或请求失败不会提交页面：已提交页保留，恢复后从该cursor继续并最终发布完整结果。
+- `admission`命令（或`check`输出的`request_admission`字段）查看各源站的共享预算、剩余令牌与冷却时间。
 
 JSON页包含snapshot_id、boundary、cursor、next_cursor及records。相同快照所有页的snapshot_id和boundary必须一致；next_cursor为null才表示结束。不接受自环、返回旧cursor或中途改变快照身份。
 
@@ -48,13 +59,15 @@ python3 -m catalogsync --home /tmp/state products --source supplier
 python3 -m catalogsync --home /tmp/state publish --source supplier
 python3 -m catalogsync --home /tmp/state check --archives
 python3 -m catalogsync --home /tmp/state collect --workers 2 --publish
+python3 -m catalogsync --home /tmp/state --rate 4 --burst 2 --concurrency 2 pull supplier
+python3 -m catalogsync --home /tmp/state admission
 ```
 
 使用`python3 -m catalogsync --help`查看映射、来源事件、追加文件、拒绝行回放及消费端操作。HTTP接口与CLI调用同一领域服务。服务无身份认证，默认仅监听127.0.0.1，用于可信隔离网络，不直接暴露公网。
 
 ## 持久化与现场
 
-home中包含catalog.sqlite、archive和datasets；check核对关系及可选原始页校验和。程序不会在正常结束后删除状态。
+home中包含catalog.sqlite、archive、datasets和request_admission；check核对关系、可选原始页校验和及各源站共享准入状态。程序不会在正常结束后删除状态。
 
 仅确认失败且原执行者已结束的运行可续采；running进程不能由另一执行者接管。线程同步与SQLite事务保护正常并行入口；强行终止进程后的状态需操作者先确认现场，不把日志静止当作执行结束。
 

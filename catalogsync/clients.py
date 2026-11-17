@@ -62,13 +62,18 @@ class SameOriginRedirect(HTTPRedirectHandler):
 
 
 class HttpClient:
-    def __init__(self, base_url, timeout=10, attempts=3):
+    def __init__(self, base_url, timeout=10, attempts=3, policy=None, state_dir=None):
+        if type(attempts) is not int or not 1 <= attempts <= 10:
+            raise ValidationError("attempts must be between 1 and 10")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.attempts = attempts
         self.opener = build_opener(SameOriginRedirect())
         from .request_policy import gate_for
-        self.gate = gate_for(base_url)
+        # Building the gate verifies the on-disk policy for this origin before
+        # any request is attempted, so conflicting configuration is refused
+        # rather than silently exceeding the shared limits.
+        self.gate = gate_for(base_url, policy=policy, state_dir=state_dir)
 
     def fetch(self, cursor):
         url = self.base_url + "/catalog?" + urlencode({"cursor": cursor})
@@ -86,9 +91,14 @@ class HttpClient:
                     return raw
             except HTTPError as error:
                 last_error = f"HTTP {error.code}"
-                self.gate.delay(self.gate.policy.retry_after(error.headers.get("Retry-After")))
+                retryable = error.code in {408, 429, 500, 502, 503, 504}
+                # Only a response that will actually be retried may impose a
+                # shared cooldown; a definitive client error must not stall
+                # every other executor of the same origin.
+                if retryable:
+                    self.gate.delay(self.gate.policy.retry_after(error.headers.get("Retry-After")))
                 error.close()
-                if error.code not in {408, 429, 500, 502, 503, 504}:
+                if not retryable:
                     raise FetchError(last_error) from error
             except (URLError, TimeoutError, OSError) as error:
                 last_error = str(error)
@@ -97,7 +107,7 @@ class HttpClient:
         raise FetchError(f"source fetch exhausted {self.attempts} attempts: {last_error}")
 
 
-def client_for(source):
+def client_for(source, policy=None, state_dir=None):
     if source["kind"] == "file":
         return FileClient(source["location"])
-    return HttpClient(source["location"])
+    return HttpClient(source["location"], policy=policy, state_dir=state_dir)

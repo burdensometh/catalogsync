@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from .archive import Archive
 from .clients import client_for, decode_page
@@ -8,19 +9,33 @@ from .models import Page, Product, canonical, now
 from .registry import Registry
 from .profiles import Profiles
 from .extraction import extract_page
+from .request_policy import gate_for
 from .runs import COUNTERS, Runs
 
 
 class Ingestor:
-    def __init__(self, database, archive_root):
+    def __init__(self, database, archive_root, state_dir=None, policy=None):
         self.db = database
         self.archive = Archive(archive_root)
+        # Request admission is shared by every executor using the same state
+        # directory, so the durable home (not the process) owns the budget.
+        self.state_dir = state_dir or Path(archive_root).resolve().parent
+        self.policy = policy
         self.registry = Registry(database)
         self.runs = Runs(database)
         self.merger = ProductMerger()
         self.profiles = Profiles(database)
 
+    def _admission_ready(self, source):
+        if source["kind"] == "http":
+            # Building the gate compares the requested limits with the ones
+            # already recorded for this origin, so conflicting configuration
+            # is refused before any request is sent or a run is claimed.
+            gate_for(source["location"], policy=self.policy, state_dir=self.state_dir)
+
     def start(self, source_id, client=None):
+        if client is None:
+            self._admission_ready(self.registry.get(source_id))
         run = self.runs.create(source_id)
         return self.execute(run["id"], client)
 
@@ -28,10 +43,14 @@ class Ingestor:
         run = self.runs.get(run_id)
         if run["status"] == "completed":
             return run
+        source = self.registry.get(run["source_id"])
+        if client is None:
+            self._admission_ready(source)
         run = self.runs.claim(run_id)
         try:
-            source = self.registry.get(run["source_id"])
-            client = client or client_for(source)
+            client = client or client_for(
+                source, policy=self.policy, state_dir=self.state_dir
+            )
             profile = self.profiles.for_run(run_id)
             cursor = run["next_cursor"]
             visited = {page["cursor"] for page in self.runs.pages(run_id)}

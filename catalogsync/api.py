@@ -26,8 +26,8 @@ def boolean(query, key, default=False):
     return value == "true"
 
 
-def serve(home, host="127.0.0.1", port=8761):
-    application = Application(home)
+def serve(home, host="127.0.0.1", port=8761, request_policy=None):
+    application = Application(home, request_policy=request_policy)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"

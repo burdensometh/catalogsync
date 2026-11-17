@@ -2,18 +2,24 @@ import json
 
 from .archive import Archive
 from .models import digest
+from .request_policy import admission_status
 
 
 class Diagnostics:
-    def __init__(self, database, archive_root):
+    def __init__(self, database, archive_root, state_dir=None):
         self.db = database
         self.archive = Archive(archive_root)
+        self.state_dir = state_dir or archive_root
 
     def check(self, verify_archives=False):
         issues = []
         integrity = self.db.integrity()
         if not integrity["ok"]:
             issues.append({"kind": "database", "detail": integrity})
+        admission = admission_status(self.state_dir)
+        for entry in admission:
+            if not entry.get("readable"):
+                issues.append({"kind": "request_admission", "origin": entry["origin"]})
         with self.db.read() as connection:
             for row in connection.execute("SELECT * FROM runs"):
                 run = dict(row)
@@ -49,4 +55,9 @@ class Diagnostics:
         for result in archives:
             if not result["ok"]:
                 issues.append({"kind": "archive", **result})
-        return {"ok": not issues, "issues": issues, "archives_checked": len(archives)}
+        return {
+            "ok": not issues,
+            "issues": issues,
+            "archives_checked": len(archives),
+            "request_admission": admission,
+        }
