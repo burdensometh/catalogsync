@@ -1,0 +1,4 @@
+source_id,sku,revision,title,category,currency,price,stock,active,attributes
+s,CNY-1,1,CNY-1,uncategorized,CNY,1.25,3,True,{}
+s,JPY-1,2,JPY-1,uncategorized,JPY,100.00,3,True,{}
+s,JPY-2,3,JPY-2,uncategorized,JPY,0.50,3,True,{}

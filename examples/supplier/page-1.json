@@ -1,0 +1,1 @@
+{"snapshot_id":"catalog-001","boundary":10,"cursor":"","next_cursor":"page-2","records":[{"sku":"tea-001","revision":4,"title":"茉莉花茶","category":"tea","currency":"CNY","price":"28.50","stock":30},{"sku":"cup-001","revision":5,"title":"陶瓷茶杯","category":"cups","currency":"CNY","price":"19.90","stock":0}]}
