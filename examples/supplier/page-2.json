@@ -1,0 +1,1 @@
+{"snapshot_id":"catalog-001","boundary":10,"cursor":"page-2","next_cursor":null,"records":[{"sku":"tea-001","revision":7,"title":"茉莉花茶","category":"tea","currency":"CNY","price":"26.80","stock":24},{"sku":"pot-001","revision":8,"title":"玻璃茶壶","category":"pots","currency":"CNY","price":"89.00","stock":12},{"sku":"bad-001","revision":8,"title":"Invalid price","price":"NaN"}]}
