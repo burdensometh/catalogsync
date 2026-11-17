@@ -87,6 +87,14 @@ class ExtendedTest(unittest.TestCase):
         self.assertEqual(parsed["records"][0]["sku"], "ld")
         self.assertEqual(parsed["records"][0]["revision"], 3)
 
+    def test_raw_page_reject_annotations_are_scoped_to_page_cursor(self):
+        client = Client({"": page("", [record()], "two"), "two": page("two", [record("bad", price="NaN")])})
+        run = self.app.ingest.start("s", client)
+        first = self.app.provenance.page(run["id"], "")
+        second = self.app.provenance.page(run["id"], "two")
+        self.assertIsNone(first["records"][0]["rejection"])
+        self.assertIsNotNone(second["records"][0]["rejection"])
+
     def test_inbox_duplicate_event_and_immutable_identity(self):
         event = {"id": "e-1", "record": record()}
         self.assertEqual(self.app.inbox.submit("s", [event])["accepted"], 1)

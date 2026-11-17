@@ -43,7 +43,7 @@ class Provenance:
         run = self.app.runs.get(run_id)
         parser = "json" if run["mode"] == "delta" else profile["document"]["parser"]
         payload = extract_page(raw, parser, cursor)
-        rejected = {row["ordinal"]: row["reason"] for row in self.app.runs.rejects(run_id, 100000)}
+        rejected = {row["ordinal"]: row["reason"] for row in self.app.runs.rejects(run_id, 100000) if row["cursor"] == cursor}
         return {
             "page": page,
             "profile": profile,
