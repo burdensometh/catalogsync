@@ -1,15 +1,15 @@
 import json
 
 from .errors import NotFound, ValidationError
+from .models import format_price
 
 
-def product_row(row):
+def product_row(row, scale="minor"):
     value = dict(row)
     value["attributes"] = json.loads(value["attributes"])
     value["active"] = bool(value["active"])
     value["sellable"] = value["active"] and value["stock"] > 0
-    cents = value["price_cents"]
-    value["price"] = f"{cents // 100}.{cents % 100:02d}"
+    value["price"] = format_price(value["price_cents"], value["currency"], scale)
     return value
 
 
@@ -40,6 +40,7 @@ class CatalogQuery:
             raise ValidationError("offset must be nonnegative")
         where, params = self.filters(source_id, category, sellable, search)
         with self.db.read() as connection:
+            scale = self.db.money_scale(connection)
             total = connection.execute(
                 f"SELECT count(*) FROM products WHERE {where}", params
             ).fetchone()[0]
@@ -47,16 +48,17 @@ class CatalogQuery:
                 f"SELECT * FROM products WHERE {where} ORDER BY source_id, sku LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             )
-            return {"total": total, "items": [product_row(row) for row in rows]}
+            return {"total": total, "items": [product_row(row, scale) for row in rows]}
 
     def product(self, source_id, sku):
         with self.db.read() as connection:
+            scale = self.db.money_scale(connection)
             row = connection.execute(
                 "SELECT * FROM products WHERE source_id = ? AND sku = ?", (source_id, sku)
             ).fetchone()
             if row is None:
                 raise NotFound("product does not exist")
-            return product_row(row)
+            return product_row(row, scale)
 
     def history(self, source_id, sku):
         with self.db.read() as connection:

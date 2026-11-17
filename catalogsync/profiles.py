@@ -66,10 +66,11 @@ class Profiles:
         profile = Profile(self.get(source_id)["document"])
         from .models import Product
         from .errors import ValidationError
+        scale = self.db.money_scale()
         result = []
         for index, raw in enumerate(records):
             try:
-                value = Product.parse(profile.normalize(raw)).public()
+                value = Product.parse(profile.normalize(raw), scale).public(scale)
                 result.append({"index": index, "ok": True, "product": value})
             except ValidationError as error:
                 result.append({"index": index, "ok": False, "error": str(error)})

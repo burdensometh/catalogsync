@@ -3,6 +3,7 @@ from pathlib import Path
 from .database import Database
 from .diagnostics import Diagnostics
 from .ingest import Ingestor
+from .migration import Migration
 from .publish import Publisher
 from .query import CatalogQuery
 from .registry import Registry
@@ -30,3 +31,4 @@ class Application:
         self.provenance = Provenance(self)
         self.rejections = Rejections(self)
         self.file_feeds = FileFeed(self)
+        self.migration = Migration(self)

@@ -59,3 +59,16 @@ home中包含catalog.sqlite、archive和datasets；check核对关系及可选原
 仅确认失败且原执行者已结束的运行可续采；running进程不能由另一执行者接管。线程同步与SQLite事务保护正常并行入口；强行终止进程后的状态需操作者先确认现场，不把日志静止当作执行结束。
 
 作者题面、答案、私有验收材料及服务器凭据不属于此源码仓库。
+
+## 金额口径与迁移
+
+当前口径（schema_version 2）按币种最小单位整数计数：CNY、USD、EUR、GBP保留两位小数，JPY按整数日元。新采集在入口校验该口径（如JPY的0.50会被隔离拒绝），查询与发布按币种渲染（JPY为"100"，CNY为"1.25"），消费端物化同一口径。schema_version 1的旧库按百分之一计数，新程序仍可打开读取并按旧口径渲染，但发布记录会以money_format标记各自口径（centi/minor），旧发布文件字节与校验和不变。
+
+`migrate`命令把旧库切换到新口径，同时迁移同级consumer.sqlite（可用--consumer指定其他消费库）：
+
+```bash
+python3 -m catalogsync --home /tmp/state migrate
+python3 -m catalogsync --home /tmp/state migrate --corrections corrections.json
+```
+
+迁移对每个数据库各用一个写事务完成：中断自动回滚，重跑继续；与新写入竞争时写入序列化在切换前或后，不暴露半新半旧结果。无法无损换算的存量（如JPY 0.50）会阻止切换并在报告中逐条指出（表、source、sku、revision、币种、存量值），不做四舍五入。修正方式有两种：通过正常采集提交可表达的新版本，或在corrections.json中给出精确替换值（可带revision限定历史版本），随后重跑migrate即可。已迁移的库重复执行不再换算；消费端重放旧发布是幂等空操作，也不会再次换算。

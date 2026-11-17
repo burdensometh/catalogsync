@@ -29,17 +29,49 @@ class Database:
         try:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(schema)
-            connection.execute(
-                "INSERT OR IGNORE INTO schema_version VALUES (?, ?)",
-                (1, now()),
-            )
-            versions = connection.execute(
-                "SELECT version FROM schema_version ORDER BY version"
-            ).fetchall()
-            if [row[0] for row in versions] != [1]:
+            # Additive shape for databases created before the money scale
+            # change: legacy publication rows are centi-era by definition.
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(publications)")
+            }
+            if "money_format" not in columns:
+                connection.execute(
+                    """ALTER TABLE publications
+                    ADD COLUMN money_format TEXT NOT NULL DEFAULT 'centi'
+                    CHECK(money_format IN ('centi', 'minor'))"""
+                )
+            versions = [
+                row[0] for row in connection.execute(
+                    "SELECT version FROM schema_version ORDER BY version"
+                )
+            ]
+            if not versions:
+                # Fresh databases are created directly in the current scale.
+                connection.execute(
+                    "INSERT INTO schema_version VALUES (?, ?)", (2, now())
+                )
+                versions = [2]
+            if set(versions) - {1, 2}:
                 raise Conflict("unsupported database schema")
         finally:
             connection.close()
+
+    def schema_version(self, connection=None):
+        def read_version(conn):
+            return conn.execute("SELECT max(version) FROM schema_version").fetchone()[0]
+        if connection is not None:
+            return read_version(connection)
+        with self.read() as conn:
+            return read_version(conn)
+
+    def money_scale(self, connection=None):
+        """Storage scale of the products/publications money columns.
+
+        Read inside the caller's own transaction so a concurrent migration
+        can never leave a statement observing a mixed scale.
+        """
+        version = self.schema_version(connection)
+        return "minor" if version is not None and version >= 2 else "centi"
 
     @contextmanager
     def read(self):

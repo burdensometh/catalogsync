@@ -44,6 +44,10 @@ class Publisher:
         descriptor, temporary = tempfile.mkstemp(prefix=".publish-", dir=self.root)
         try:
             with self.db.read() as connection:
+                # The whole export is built from one consistent snapshot; the
+                # money scale of that snapshot is recorded on the publication
+                # so consumers know which convention the file was built with.
+                scale = self.db.money_scale(connection)
                 clauses = ["1 = 1"]
                 params = []
                 if source_id:
@@ -65,7 +69,7 @@ class Publisher:
                 vector_query += " GROUP BY s.id"
                 vector = {row[0]: row[1] for row in connection.execute(vector_query, vector_params)}
                 with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
-                    count = self.write_rows(stream, rows, format)
+                    count = self.write_rows(stream, rows, format, scale)
                     stream.flush()
                     os.fsync(stream.fileno())
             sha = self.file_hash(temporary)
@@ -73,9 +77,10 @@ class Publisher:
             with self.db.write() as connection:
                 connection.execute(
                     """UPDATE publications SET status = 'ready', output_path = ?,
-                    sha256 = ?, row_count = ?, revision_vector = ?, completed_at = ?
+                    sha256 = ?, row_count = ?, revision_vector = ?, money_format = ?,
+                    completed_at = ?
                     WHERE id = ?""",
-                    (path.name, sha, count, canonical(vector), now(), publication_id),
+                    (path.name, sha, count, canonical(vector), scale, now(), publication_id),
                 )
                 self.db.event(connection, "dataset_published", {
                     "publication_id": publication_id, "sha256": sha, "rows": count,
@@ -92,14 +97,14 @@ class Publisher:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def write_rows(self, stream, rows, format):
+    def write_rows(self, stream, rows, format, scale="minor"):
         writer = None
         if format == "csv":
             writer = csv.DictWriter(stream, fieldnames=EXPORT_FIELDS)
             writer.writeheader()
         count = 0
         for row in rows:
-            item = product_row(row)
+            item = product_row(row, scale)
             item = {field: item[field] for field in EXPORT_FIELDS}
             if writer:
                 item["attributes"] = canonical(item["attributes"])

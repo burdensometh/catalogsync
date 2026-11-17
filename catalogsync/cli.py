@@ -104,6 +104,9 @@ def parser():
     diff.add_argument("second")
     check = commands.add_parser("check")
     check.add_argument("--archives", action="store_true")
+    migrate = commands.add_parser("migrate")
+    migrate.add_argument("--consumer", help="consumer database path (default: sibling consumer.sqlite)")
+    migrate.add_argument("--corrections", help="JSON file with exact price corrections for blocked records")
     server = commands.add_parser("serve")
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8761)
@@ -119,7 +122,7 @@ def execute(args):
     app = Application(args.home)
     command = args.command
     if command == "init":
-        return {"home": str(app.home), "schema": 1}
+        return {"home": str(app.home), "schema": app.database.schema_version()}
     if command == "source-add":
         return app.registry.register(args.id, args.name or args.id, args.kind, args.location)
     if command == "sources":
@@ -197,6 +200,9 @@ def execute(args):
         return app.publisher.diff(args.first, args.second)
     if command == "check":
         return app.diagnostics.check(args.archives)
+    if command == "migrate":
+        corrections = json.loads(Path(args.corrections).read_text(encoding="utf-8")) if args.corrections else None
+        return app.migration.migrate(args.consumer, corrections)
     if command == "serve":
         from .api import serve
         server = serve(args.home, args.host, args.port)
@@ -230,4 +236,6 @@ def main(argv=None):
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if args.command == "check" and not result["ok"]:
         return 2
+    if args.command == "migrate" and not result["ok"]:
+        return 1
     return 0

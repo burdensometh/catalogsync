@@ -68,7 +68,7 @@ def serve(home, host="127.0.0.1", port=8761):
             app = application
             if method == "GET":
                 if parts == ["health"]:
-                    return 200, {"service": "catalogsync", "schema": 1}
+                    return 200, {"service": "catalogsync", "schema": app.database.schema_version()}
                 if parts == ["sources"]:
                     return 200, app.registry.list()
                 if parts == ["rejections"]:
@@ -165,6 +165,8 @@ def serve(home, host="127.0.0.1", port=8761):
                     )
                 if parts == ["publication-diff"]:
                     return 200, app.publisher.diff(data.get("first"), data.get("second"))
+                if parts == ["migrate"]:
+                    return 200, app.migration.migrate(data.get("consumer"), data.get("corrections"))
             raise NotFound("endpoint does not exist")
 
         def dispatch(self, method):

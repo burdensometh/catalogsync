@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS publications (
     sha256 TEXT,
     row_count INTEGER,
     revision_vector TEXT,
+    money_format TEXT NOT NULL DEFAULT 'centi' CHECK(money_format IN ('centi', 'minor')),
     error TEXT,
     created_at TEXT NOT NULL,
     completed_at TEXT

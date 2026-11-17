@@ -4,10 +4,14 @@ import json
 import sqlite3
 
 from .errors import Conflict, IntegrityError, ValidationError
-from .models import Product, canonical, now
+from .models import Product, canonical, now, plan_scale_changes
 
 
 CONSUMER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    installed_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS datasets (
     publication_id TEXT PRIMARY KEY,
     sha256 TEXT NOT NULL,
@@ -43,7 +47,22 @@ class DatasetConsumer:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = self.connect()
         try:
+            # A database that already has materialized data but no version
+            # marker is a legacy (centi-scale) consumer; fresh consumer
+            # databases are created in the current minor-unit scale.
+            legacy = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='datasets'"
+            ).fetchone() is not None
             connection.executescript(CONSUMER_SCHEMA)
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_version VALUES (?, ?)",
+                (1 if legacy else 2, now()),
+            )
+            versions = {
+                row[0] for row in connection.execute("SELECT version FROM schema_version")
+            }
+            if versions - {1, 2}:
+                raise Conflict("unsupported consumer database schema")
         finally:
             connection.close()
 
@@ -53,7 +72,11 @@ class DatasetConsumer:
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
-    def records(self, publication, path):
+    def money_scale(self, connection):
+        version = connection.execute("SELECT max(version) FROM schema_version").fetchone()[0]
+        return "minor" if version is not None and version >= 2 else "centi"
+
+    def records(self, publication, path, scale="minor"):
         with Path(path).open(encoding="utf-8", newline="") as stream:
             if publication["format"] == "jsonl":
                 iterator = (json.loads(line) for line in stream if line.strip())
@@ -74,10 +97,10 @@ class DatasetConsumer:
                 source_id = raw.get("source_id")
                 if source_id not in publication["revision_vector"]:
                     raise IntegrityError("dataset row is outside publication source scope")
-                product = Product.parse(raw)
+                product = Product.parse(raw, scale)
                 if product.revision > publication["revision_vector"][source_id]:
                     raise IntegrityError("dataset revision exceeds publication vector")
-                if publication["sellable_only"] and not product.public()["sellable"]:
+                if publication["sellable_only"] and not product.public(scale)["sellable"]:
                     raise IntegrityError("unavailable row in sellable-only dataset")
                 yield source_id, product
 
@@ -88,6 +111,7 @@ class DatasetConsumer:
         connection = self.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            scale = self.money_scale(connection)
             old = connection.execute("SELECT * FROM datasets WHERE publication_id=?", (publication_id,)).fetchone()
             if old:
                 if old["sha256"] != publication["sha256"]:
@@ -105,7 +129,7 @@ class DatasetConsumer:
             for source_id in source_ids:
                 connection.execute("DELETE FROM catalog_records WHERE source_id=?", (source_id,))
             count = 0
-            for source_id, product in self.records(publication, path):
+            for source_id, product in self.records(publication, path, scale):
                 try:
                     connection.execute(
                         "INSERT INTO catalog_records VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -128,6 +152,67 @@ class DatasetConsumer:
                 )
             connection.commit()
             return {"publication_id": publication_id, "replayed": False, "rows": count}
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def scan_scale_migration(self, connection, corrections, matched=None):
+        rows = [
+            dict(row) for row in connection.execute(
+                "SELECT * FROM catalog_records ORDER BY source_id, sku"
+            )
+        ]
+        return plan_scale_changes(rows, corrections, matched, "catalog_records")
+
+    def plan_scale_migration(self, corrections, matched=None):
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN")
+            scale = self.money_scale(connection)
+            if scale == "minor":
+                connection.commit()
+                return {"scale": scale, "changes": [], "blockers": [], "corrections_applied": 0}
+            changes, blockers, applied = self.scan_scale_migration(connection, corrections, matched)
+            connection.commit()
+            return {
+                "scale": scale,
+                "changes": changes,
+                "blockers": blockers,
+                "corrections_applied": applied,
+            }
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def apply_scale_migration(self, corrections):
+        """Convert stored centi-scale amounts to currency minor units in one
+        transaction. Interrupted runs roll back; reruns are no-ops. Records
+        that cannot be converted losslessly abort the switch unchanged."""
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            if self.money_scale(connection) == "minor":
+                connection.rollback()
+                return {"status": "already_migrated", "converted": {"catalog_records": 0},
+                        "corrections_applied": 0, "blockers": []}
+            changes, blockers, applied = self.scan_scale_migration(connection, corrections)
+            if blockers:
+                connection.rollback()
+                return {"status": "blocked", "converted": {"catalog_records": 0},
+                        "corrections_applied": 0, "blockers": blockers}
+            for row, minor in changes:
+                connection.execute(
+                    "UPDATE catalog_records SET price_cents=? WHERE source_id=? AND sku=?",
+                    (minor, row["source_id"], row["sku"]),
+                )
+            connection.execute("INSERT INTO schema_version VALUES (?, ?)", (2, now()))
+            connection.commit()
+            return {"status": "migrated", "converted": {"catalog_records": len(changes)},
+                    "corrections_applied": applied, "blockers": []}
         except BaseException:
             connection.rollback()
             raise

@@ -86,6 +86,10 @@ class Ingestor:
         counts = dict.fromkeys(COUNTERS, 0)
         profile = self.profiles.for_run(run_id)
         with self.db.write() as connection:
+            # Money is parsed and stored in the scale this transaction
+            # observes; a migration commits atomically before or after, so a
+            # page can never land half in one scale and half in the other.
+            scale = self.db.money_scale(connection)
             run = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
             if not run or run["status"] != "running":
                 raise Conflict("page requires an owned running run")
@@ -96,7 +100,7 @@ class Ingestor:
                     raise ValidationError("snapshot identity changed during pagination")
             for ordinal, record in enumerate(page.records):
                 try:
-                    product = Product.parse(profile.normalize(record))
+                    product = Product.parse(profile.normalize(record), scale)
                     if product.revision > page.boundary:
                         raise ValidationError("record revision exceeds snapshot boundary")
                     outcome = self.merger.merge(connection, run["source_id"], run_id, product)
